@@ -41,6 +41,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [requestOpen, setRequestOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
 
   const loadData = useCallback(async (userId: string) => {
     const { data: p, error } = await supabase.from("profiles").select("id,full_name,phone,role,vehicle_type").eq("id", userId).single();
@@ -104,6 +105,31 @@ export default function Home() {
     if (error) setNotice(error.message); else { setRequestOpen(false); setNotice("Delivery request sent — a driver can now accept it."); await loadData(session.user.id); }
   }
 
+  async function updateAccount(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!session || !profile) return;
+    setNotice("");
+    const form = new FormData(e.currentTarget);
+    const changes = {
+      full_name: String(form.get("full_name") ?? "").trim(),
+      phone: String(form.get("phone") ?? "").trim(),
+      vehicle_type: profile.role === "driver" ? String(form.get("vehicle_type") ?? "") : null,
+    };
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(changes)
+      .eq("id", session.user.id)
+      .select("id,full_name,phone,role,vehicle_type")
+      .single();
+    if (error) {
+      setNotice(error.message);
+      return;
+    }
+    setProfile(data as Profile);
+    setAccountOpen(false);
+    setNotice("Account details updated.");
+  }
+
   async function acceptJob(id: string) {
     if (!session) return;
     const { data, error } = await supabase.from("delivery_requests").update({ driver_id: session.user.id, status: "accepted", accepted_at: new Date().toISOString() }).eq("id", id).eq("status", "requested").select();
@@ -125,7 +151,11 @@ export default function Home() {
   const assigned = useMemo(() => deliveries.filter(d => d.driver_id === session?.user.id), [deliveries, session]);
 
   if (loading) return <div className="loading-screen"><img src="/onit.svg" alt="Onit"/><span>Getting Onit…</span></div>;
-  if (session && profile) return <Dashboard profile={profile} deliveries={deliveries} available={available} assigned={assigned} notice={notice} setNotice={setNotice} onNew={() => setRequestOpen(true)} onAccept={acceptJob} onProgress={progressJob} onLogout={() => supabase.auth.signOut()} />;
+  if (session && profile) return <>
+    <Dashboard profile={profile} deliveries={deliveries} available={available} assigned={assigned} notice={notice} setNotice={setNotice} onNew={() => setRequestOpen(true)} onAccount={() => setAccountOpen(true)} onAccept={acceptJob} onProgress={progressJob} onLogout={() => supabase.auth.signOut()} />
+    {requestOpen && profile.role === "customer" && <RequestModal profile={profile} onClose={() => setRequestOpen(false)} onSubmit={createRequest}/>}
+    {accountOpen && <AccountModal profile={profile} email={session.user.email ?? ""} onClose={() => setAccountOpen(false)} onSubmit={updateAccount}/>}
+  </>;
 
   return <main>
     <section className="hero-shell">
@@ -141,10 +171,10 @@ export default function Home() {
   </main>;
 }
 
-function Dashboard({ profile, deliveries, available, assigned, notice, setNotice, onNew, onAccept, onProgress, onLogout }: { profile: Profile; deliveries: Delivery[]; available: Delivery[]; assigned: Delivery[]; notice: string; setNotice: (v:string)=>void; onNew:()=>void; onAccept:(id:string)=>void; onProgress:(d:Delivery)=>void; onLogout:()=>void }) {
+function Dashboard({ profile, deliveries, available, assigned, notice, setNotice, onNew, onAccount, onAccept, onProgress, onLogout }: { profile: Profile; deliveries: Delivery[]; available: Delivery[]; assigned: Delivery[]; notice: string; setNotice: (v:string)=>void; onNew:()=>void; onAccount:()=>void; onAccept:(id:string)=>void; onProgress:(d:Delivery)=>void; onLogout:()=>void }) {
   const driver = profile.role === "driver";
   const jobs = driver ? assigned : deliveries;
-  return <main className="dashboard"><aside><img src="/onit-white.svg" alt="Onit"/><div className="side-user"><span>{profile.full_name.slice(0,1).toUpperCase()}</span><div><strong>{profile.full_name}</strong><small>{driver ? `${profile.vehicle_type ?? "Driver"} driver` : "Customer"}</small></div></div><nav><a className="active"><Icon name={driver ? "truck" : "bag"}/> {driver ? "My deliveries" : "My requests"}</a><a><Icon name="user"/> Account</a></nav><button onClick={onLogout}><Icon name="logout"/> Log out</button></aside><section className="dash-main"><header><div><span className="eyebrow">{driver ? "DRIVER DASHBOARD" : "CUSTOMER DASHBOARD"}</span><h1>{driver ? "Ready when you are." : `Hello, ${profile.full_name.split(" ")[0]}.`}</h1><p>{driver ? "Choose an available delivery and keep the customer updated." : "Request a collection and follow its journey here."}</p></div>{!driver && <button className="primary" onClick={onNew}><Icon name="plus"/> New delivery request</button>}</header>{notice && <div className="dash-notice"><span>{notice}</span><button onClick={() => setNotice("")}>×</button></div>}{driver && <><div className="dash-title"><h2>Available nearby</h2><span>{available.length} open</span></div><div className="job-grid">{available.length ? available.map(d => <JobCard key={d.id} job={d} action={<button onClick={() => onAccept(d.id)}>Accept delivery <Icon name="arrow" size={17}/></button>}/>) : <Empty text="No open requests right now. New jobs will appear here live."/>}</div></>}<div className="dash-title"><h2>{driver ? "My active deliveries" : "Your deliveries"}</h2><span>{jobs.length} total</span></div><div className="job-list">{jobs.length ? jobs.map(d => <JobCard key={d.id} job={d} customer={!driver} action={driver && d.status !== "delivered" ? <button onClick={() => onProgress(d)}>{d.status === "accepted" ? "Mark collecting" : d.status === "collecting" ? "Start delivery" : "Mark delivered"} <Icon name="arrow" size={17}/></button> : undefined}/>) : <Empty text={driver ? "You haven’t accepted a delivery yet." : "Your first delivery request will appear here."}/>}</div></section></main>;
+  return <main className="dashboard"><aside><img src="/onit-white.svg" alt="Onit"/><div className="side-user"><span>{profile.full_name.slice(0,1).toUpperCase()}</span><div><strong>{profile.full_name}</strong><small>{driver ? `${profile.vehicle_type ?? "Driver"} driver` : "Customer"}</small></div></div><nav><button className="active" type="button"><Icon name={driver ? "truck" : "bag"}/> {driver ? "My deliveries" : "My requests"}</button><button type="button" onClick={onAccount}><Icon name="user"/> Account</button></nav><button onClick={onLogout}><Icon name="logout"/> Log out</button></aside><section className="dash-main"><header><div><span className="eyebrow">{driver ? "DRIVER DASHBOARD" : "CUSTOMER DASHBOARD"}</span><h1>{driver ? "Ready when you are." : `Hello, ${profile.full_name.split(" ")[0]}.`}</h1><p>{driver ? "Choose an available delivery and keep the customer updated." : "Request a collection and follow its journey here."}</p></div>{!driver && <button className="primary" onClick={onNew}><Icon name="plus"/> New delivery request</button>}</header>{notice && <div className="dash-notice"><span>{notice}</span><button onClick={() => setNotice("")}>×</button></div>}{driver && <><div className="dash-title"><h2>Available nearby</h2><span>{available.length} open</span></div><div className="job-grid">{available.length ? available.map(d => <JobCard key={d.id} job={d} action={<button onClick={() => onAccept(d.id)}>Accept delivery <Icon name="arrow" size={17}/></button>}/>) : <Empty text="No open requests right now. New jobs will appear here live."/>}</div></>}<div className="dash-title"><h2>{driver ? "My active deliveries" : "Your deliveries"}</h2><span>{jobs.length} total</span></div><div className="job-list">{jobs.length ? jobs.map(d => <JobCard key={d.id} job={d} customer={!driver} action={driver && d.status !== "delivered" ? <button onClick={() => onProgress(d)}>{d.status === "accepted" ? "Mark collecting" : d.status === "collecting" ? "Start delivery" : "Mark delivered"} <Icon name="arrow" size={17}/></button> : undefined}/>) : <Empty text={driver ? "You haven’t accepted a delivery yet." : "Your first delivery request will appear here."}/>}</div></section></main>;
 }
 
 function JobCard({ job, action, customer = false }: { job: Delivery; action?: React.ReactNode; customer?: boolean }) {
@@ -155,4 +185,24 @@ function Empty({ text }: { text: string }) { return <div className="empty"><Icon
 
 function RequestModal({ profile, onClose, onSubmit }: { profile: Profile; onClose:()=>void; onSubmit:(e:FormEvent<HTMLFormElement>)=>void }) {
   return <div className="modal-backdrop"><div className="request-card"><button className="modal-close" onClick={onClose}>×</button><span className="eyebrow">NEW REQUEST</span><h2>What can we collect?</h2><p>Enter the collection details and we&apos;ll make it available to nearby drivers.</p><form onSubmit={onSubmit}><div className="two-fields"><label>Collection place<input name="pickup_name" required placeholder="e.g. Tesco Ardkeen"/></label><label>Your phone<input name="phone" required defaultValue={profile.phone}/></label></div><label>Collection address<input name="pickup_address" required placeholder="Full collection address"/></label><label>Delivery address<input name="dropoff_address" required placeholder="Your delivery address"/></label><label>What are we collecting?<textarea name="item_description" required placeholder="Describe the order or parcel clearly"/></label><div className="two-fields"><label>Preferred time<input name="requested_for" type="datetime-local"/></label><label>Driver notes<input name="notes" placeholder="Order number, access details…"/></label></div><div className="fee-row"><span>Estimated delivery fee<small>Payment arranged on delivery for this first release</small></span><strong>€7.50</strong></div><button className="auth-submit" type="submit">Send delivery request <Icon name="arrow"/></button></form></div></div>;
+}
+
+
+function AccountModal({ profile, email, onClose, onSubmit }: { profile: Profile; email: string; onClose:()=>void; onSubmit:(e:FormEvent<HTMLFormElement>)=>void }) {
+  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div className="request-card account-card">
+      <button className="modal-close" type="button" onClick={onClose}>×</button>
+      <span className="eyebrow">MY ACCOUNT</span>
+      <h2>Your Onit details</h2>
+      <p>Keep your contact details up to date for delivery updates.</p>
+      <form onSubmit={onSubmit}>
+        <label>Full name<input name="full_name" required defaultValue={profile.full_name}/></label>
+        <label>Email address<input value={email} disabled aria-label="Email address"/></label>
+        <label>Phone number<input name="phone" type="tel" required defaultValue={profile.phone}/></label>
+        {profile.role === "driver" && <label>Vehicle<select name="vehicle_type" required defaultValue={profile.vehicle_type ?? ""}><option value="" disabled>Select your vehicle</option><option>Car</option><option>Van</option><option>Motorbike</option><option>Bicycle</option></select></label>}
+        <div className="account-role"><span>Account type</span><strong>{profile.role === "driver" ? "Driver" : "Customer"}</strong></div>
+        <button className="auth-submit" type="submit">Save account details <Icon name="check"/></button>
+      </form>
+    </div>
+  </div>;
 }
